@@ -843,6 +843,30 @@ class hyperdb extends wpdb {
 
 		$this->dbh = $this->dbhs[ $dbhname ]; // needed by $wpdb->_real_escape()
 
+		/*
+		 * Strip the SQL modes WordPress cannot run under, exactly as wpdb::db_connect() does
+		 * immediately after its own set_charset() call. HyperDB overrides db_connect() and never
+		 * invoked this, so whatever modes the server hands out at connect survived for the whole
+		 * request -- while WP-CLI, which this drop-in returns early for, got stock wpdb and the
+		 * stripping. The same query could therefore return rows under `wp eval` and none over HTTP.
+		 *
+		 * ONLY_FULL_GROUP_BY is the one that bites hardest, because core's own SQL violates it. A
+		 * get_terms() call with a meta_key emits
+		 *
+		 *     SELECT DISTINCT t.term_id FROM wp_terms AS t
+		 *       INNER JOIN wp_termmeta ON ( t.term_id = wp_termmeta.term_id ) ...
+		 *      ORDER BY t.name ASC
+		 *
+		 * and t.name is not in the select list, so MySQL refuses the statement outright. get_terms()
+		 * returns an empty array and the caller renders an empty page with a 200 -- no exception, no
+		 * warning, nothing in the response to say a query failed.
+		 *
+		 * Placed after $this->dbh is assigned, which set_sql_mode() reads, and inside the
+		 * fresh-connection block rather than before the reuse early-return above: this runs once per
+		 * new backend link, the same cadence as set_charset() and as core.
+		 */
+		$this->set_sql_mode();
+
 		$this->last_used_server = compact( 'host', 'user', 'name', 'read', 'write' );
 
 		$this->used_servers[ $dbhname ] = $this->last_used_server;
